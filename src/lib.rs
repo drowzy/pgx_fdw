@@ -2,7 +2,6 @@ use pg_sys::*;
 use pgx::*;
 
 // https://www.postgresql.org/docs/13/fdw-callbacks.html
-pub type Row = Vec<Option<pg_sys::Datum>>;
 pub type Tuple = (String, Option<pg_sys::Datum>, pgx::PgOid);
 
 pub mod fdw_options {
