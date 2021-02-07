@@ -67,7 +67,7 @@ pub trait ForeignData {
 
     fn begin(options: &fdw_options::Options) -> Self;
     fn execute(&mut self, desc: &PgTupleDesc) -> Self::RowIterator;
-    fn columns(_options: &fdw_options::Options) -> Option<Vec<Option<String>>> {
+    fn indices(_options: &fdw_options::Options) -> Option<Vec<String>> {
         None
     }
 
