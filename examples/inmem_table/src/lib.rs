@@ -25,6 +25,10 @@ impl pgx_fdw::ForeignData for InMemTable {
         InMemTable {}
     }
 
+    fn indices(_opts: &pgx_fdw::fdw_options::Options) -> Option<Vec<String>> {
+        Some(vec![String::from("id")])
+    }
+
     fn execute(&mut self, _desc: &PgTupleDesc) -> Self::RowIterator {
         let rows: Vec<Vec<String>> = TABLE
             .read()
@@ -77,6 +81,10 @@ impl pgx_fdw::ForeignData for InMemTable {
         let mut rows = TABLE.write().unwrap();
         rows.push(row.unwrap().clone());
 
+        None
+    }
+
+    fn delete(&self, desc: &PgTupleDesc, tuples: Vec<pgx_fdw::Tuple>) -> Option<Vec<pgx_fdw::Tuple>> {
         None
     }
 }
