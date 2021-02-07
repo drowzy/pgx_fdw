@@ -75,7 +75,7 @@ pub trait ForeignData {
         None
     }
 
-    fn delete(&self, _indices: Vec<Tuple>) -> Option<Vec<Tuple>> {
+    fn delete(&self, _desc: &PgTupleDesc, _indices: Vec<Tuple>) -> Option<Vec<Tuple>> {
         None
     }
 }
@@ -92,7 +92,6 @@ impl<T: ForeignData> FdwState<T> {
         baserel: *mut RelOptInfo,
         _foreigntableid: Oid,
     ) {
-
         (*baserel).rows = 0.0;
     }
 
@@ -101,7 +100,6 @@ impl<T: ForeignData> FdwState<T> {
         baserel: *mut RelOptInfo,
         foreigntableid: Oid,
     ) {
-
         pg_sys::add_path(
             baserel,
             pg_sys::create_foreignscan_path(
@@ -109,7 +107,6 @@ impl<T: ForeignData> FdwState<T> {
                 baserel,
                 std::ptr::null_mut(),
                 (*baserel).rows,
-                // TODO: real costs
                 pg_sys::Cost::from(10),
                 pg_sys::Cost::from(0),
                 std::ptr::null_mut(),
@@ -129,7 +126,6 @@ impl<T: ForeignData> FdwState<T> {
         scan_clauses: *mut List,
         outer_plan: *mut Plan,
     ) -> *mut ForeignScan {
-
         let scan_relid = (*baserel).relid;
         let scan_clauses = pg_sys::extract_actual_clauses(scan_clauses, false);
 
@@ -234,8 +230,7 @@ impl<T: ForeignData> FdwState<T> {
         slot
     }
 
-    unsafe extern "C" fn ReScanForeignScan(node: *mut ForeignScanState) {
-    }
+    unsafe extern "C" fn ReScanForeignScan(node: *mut ForeignScanState) {}
 
     unsafe extern "C" fn EndForeignScan(node: *mut ForeignScanState) {
         Box::from_raw((*node).fdw_state as *mut Self);
@@ -246,7 +241,6 @@ impl<T: ForeignData> FdwState<T> {
         target_rte: *mut RangeTblEntry,
         target_relation: Relation,
     ) {
-
         let _opts = fdw_options::from_relation(&*target_relation);
         let _tupdesc = PgTupleDesc::from_pg_copy((*target_relation).rd_att);
     }
@@ -258,7 +252,6 @@ impl<T: ForeignData> FdwState<T> {
         subplan_index: ::std::os::raw::c_int,
         eflags: ::std::os::raw::c_int,
     ) {
-
         let rel = *(*rinfo).ri_RelationDesc;
         let opts = fdw_options::from_relation(&rel);
         let tupdesc = PgTupleDesc::from_pg_copy(rel.rd_att);
@@ -278,7 +271,14 @@ impl<T: ForeignData> FdwState<T> {
     ) -> *mut TupleTableSlot {
         let mut fdw_state = PgBox::<Self>::from_pg((*rinfo).ri_FdwState as *mut Self);
         let tupdesc = PgTupleDesc::from_pg_copy((*slot).tts_tupleDescriptor);
+        let tuples = Self::slot_to_tuples(slot, &tupdesc);
+        let _result = fdw_state.state.insert(&tupdesc, tuples);
 
+        (*rinfo).ri_FdwState = fdw_state.into_pg() as pgx::memcxt::void_mut_ptr;
+        slot
+    }
+
+    unsafe fn slot_to_tuples(slot: *mut TupleTableSlot, tupdesc: &PgTupleDesc) -> Vec<Tuple> {
         let slot = if (*slot).tts_nvalid == 0 {
             Self::get_some_attrs(slot, tupdesc.natts)
         } else {
@@ -306,14 +306,7 @@ impl<T: ForeignData> FdwState<T> {
             })
             .collect();
 
-        let result = fdw_state.state.insert(&tupdesc, tuples);
-
-        (*rinfo).ri_FdwState = fdw_state.into_pg() as pgx::memcxt::void_mut_ptr;
-        slot
-    }
-
-    fn slot_to_tuples() -> Vec<Tuple> {
-        Vec::new()
+        tuples
     }
 
     unsafe extern "C" fn ExecForeignDelete(
@@ -324,6 +317,8 @@ impl<T: ForeignData> FdwState<T> {
     ) -> *mut TupleTableSlot {
         let mut fdw_state = PgBox::<Self>::from_pg((*rinfo).ri_FdwState as *mut Self);
         let tupdesc = PgTupleDesc::from_pg_copy((*plan_slot).tts_tupleDescriptor);
+        let tuples = Self::slot_to_tuples(plan_slot, &tupdesc);
+        let _result = fdw_state.state.delete(&tupdesc, tuples);
 
         slot
     }
@@ -349,7 +344,7 @@ impl<T: ForeignData> FdwState<T> {
         handler.BeginForeignModify = Some(Self::BeginForeignModify);
         handler.ExecForeignInsert = Some(Self::ExecForeignInsert);
         handler.ExecForeignUpdate = None;
-        handler.ExecForeignDelete = None;
+        handler.ExecForeignDelete = Some(Self::ExecForeignDelete);
         handler.EndForeignModify = None;
         handler.IsForeignRelUpdatable = None;
         handler.PlanDirectModify = None;
