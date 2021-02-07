@@ -241,8 +241,40 @@ impl<T: ForeignData> FdwState<T> {
         target_rte: *mut RangeTblEntry,
         target_relation: Relation,
     ) {
-        let _opts = fdw_options::from_relation(&*target_relation);
-        let _tupdesc = PgTupleDesc::from_pg_copy((*target_relation).rd_att);
+        let opts = fdw_options::from_relation(&*target_relation);
+        let tupdesc = PgTupleDesc::from_pg_copy((*target_relation).rd_att);
+
+        if let Some(keys) = T::indices(&opts) {
+            // Build a map of column names to attributes and column index
+            let mut list = PgList::<TargetEntry>::from_pg((*parsetree).targetList);
+            tupdesc
+                .iter()
+                .filter(|attr| keys.contains(&attr.name().into()))
+                .for_each(|attr| {
+                    let var = pg_sys::makeVar(
+                        (*parsetree).resultRelation as pg_sys::Index,
+                        attr.attnum,
+                        attr.atttypid,
+                        attr.atttypmod,
+                        attr.attcollation,
+                        0,
+                    );
+
+                    // TODO: error handling
+
+                    let ckey = std::ffi::CString::new(attr.name()).unwrap();
+                    let tle = pg_sys::makeTargetEntry(
+                        var as *mut pg_sys::Expr,
+                        (list.len() + 1) as i16,
+                        pg_sys::pstrdup(ckey.as_ptr()),
+                        true,
+                    );
+
+                    list.push(tle);
+                });
+
+            (*parsetree).targetList = list.into_pg();
+        }
     }
 
     unsafe extern "C" fn BeginForeignModify(
