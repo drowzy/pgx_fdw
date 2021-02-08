@@ -5,11 +5,11 @@ use std::sync::RwLock;
 pg_module_magic!();
 
 lazy_static! {
-    static ref TABLE: RwLock<Vec<Row>> = RwLock::new(vec![]);
+    static ref TABLE: RwLock<Vec<User>> = RwLock::new(vec![]);
 }
 
 #[derive(Debug, Default, Clone)]
-struct Row {
+struct User {
     id: String,
     name: String,
     email: String,
@@ -53,12 +53,12 @@ impl pgx_fdw::ForeignData for InMemTable {
     ) -> Option<Vec<pgx_fdw::Tuple>> {
         let row = tuple
             .iter()
-            .try_fold(Row::default(), |mut t, (name, datum, typoid)| {
+            .try_fold(User::default(), |mut t, (name, datum, typoid)| {
                 match (name.to_string().as_str()) {
                     "id" => t.id = into_value::<String>(*datum, *typoid).unwrap(),
                     "name" => t.name = into_value::<String>(*datum, *typoid).unwrap(),
                     "email" => t.email = into_value::<String>(*datum, *typoid).unwrap(),
-                    _ => error!("no match"),
+                    _ => error!(""),
                 }
 
                 Some(t)
@@ -78,14 +78,13 @@ impl pgx_fdw::ForeignData for InMemTable {
         if let Some((name, datum, oid)) = tuples.first() {
             match name.to_string().as_str() {
                 "id" => {
-                    let predicate =
-                        |row: &Row| row.id == into_value::<String>(*datum, *oid).unwrap();
+                    let predicate = |u: &User| u.id == into_value::<String>(*datum, *oid).unwrap();
                     let mut rows = TABLE.write().unwrap();
                     let vec = std::mem::replace(&mut *rows, vec![]);
 
                     *rows = vec.into_iter().filter(|r| !predicate(r)).collect();
                 }
-                _ => error!("Requires `id` index to delete"),
+                _ => error!(""),
             }
         }
 
