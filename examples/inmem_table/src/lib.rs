@@ -15,6 +15,12 @@ struct Row {
     email: String,
 }
 
+fn into_value<T: FromDatum>(datum: Option<pg_sys::Datum>, typoid: pgx::PgOid) -> Option<T> {
+    match datum {
+        Some(d) => unsafe { T::from_datum(d, false, typoid.value()) },
+        None => None,
+    }
+}
 struct InMemTable {}
 
 impl pgx_fdw::ForeignData for InMemTable {
@@ -47,35 +53,15 @@ impl pgx_fdw::ForeignData for InMemTable {
     ) -> Option<Vec<pgx_fdw::Tuple>> {
         let row = tuple
             .iter()
-            .try_fold(Row::default(), |mut t, (name, datum, oid)| {
-                match (name.to_string().as_str(), datum) {
-                    ("id", Some(i)) => {
-                        let i = unsafe {
-                            String::from_datum(i.to_owned(), false, oid.value()).unwrap()
-                        };
-                        t.id = i;
-                        Some(t)
-                    }
-                    ("name", Some(d)) => {
-                        let s = unsafe {
-                            String::from_datum(d.to_owned(), false, oid.value()).unwrap()
-                        };
-                        log!("GOT {:?}", s);
-                        t.name = s;
-                        Some(t)
-                    }
-                    ("email", Some(d)) => {
-                        let s = unsafe {
-                            String::from_datum(d.to_owned(), false, oid.value()).unwrap()
-                        };
-                        log!("GOT {:?}", s);
-                        t.email = s;
-                        Some(t)
-                    }
-                    _ => {
-                        error!("no match");
-                    }
+            .try_fold(Row::default(), |mut t, (name, datum, typoid)| {
+                match (name.to_string().as_str()) {
+                    "id" => t.id = into_value::<String>(*datum, *typoid).unwrap(),
+                    "name" => t.name = into_value::<String>(*datum, *typoid).unwrap(),
+                    "email" => t.email = into_value::<String>(*datum, *typoid).unwrap(),
+                    _ => error!("no match"),
                 }
+
+                Some(t)
             });
 
         let mut rows = TABLE.write().unwrap();
@@ -84,7 +70,25 @@ impl pgx_fdw::ForeignData for InMemTable {
         None
     }
 
-    fn delete(&self, desc: &PgTupleDesc, tuples: Vec<pgx_fdw::Tuple>) -> Option<Vec<pgx_fdw::Tuple>> {
+    fn delete(
+        &self,
+        desc: &PgTupleDesc,
+        tuples: Vec<pgx_fdw::Tuple>,
+    ) -> Option<Vec<pgx_fdw::Tuple>> {
+        if let Some((name, datum, oid)) = tuples.first() {
+            match name.to_string().as_str() {
+                "id" => {
+                    let predicate =
+                        |row: &Row| row.id == into_value::<String>(*datum, *oid).unwrap();
+                    let mut rows = TABLE.write().unwrap();
+                    let vec = std::mem::replace(&mut *rows, vec![]);
+
+                    *rows = vec.into_iter().filter(|r| !predicate(r)).collect();
+                }
+                _ => error!("Requires `id` index to delete"),
+            }
+        }
+
         None
     }
 }
