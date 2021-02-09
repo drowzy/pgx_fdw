@@ -15,24 +15,19 @@ pub mod fdw_options {
         pub server_opts: OptionMap,
         pub table_opts: OptionMap,
         pub table_name: String,
+        pub table_namespace: String,
     }
 
-    pub unsafe fn from_relation(relation: &pg_sys::RelationData) -> Options {
-        let table = pg_sys::GetForeignTable(relation.rd_id);
-        let server = pg_sys::GetForeignServer((*table).serverid);
-        let server_opts = from_pg_list((*server).options);
-        let table_opts = from_pg_list((*table).options);
-        let raw_name = pg_sys::get_rel_name((*table).relid);
-
-        let table_name = match CStr::from_ptr(raw_name).to_str() {
-            Ok(name) => name.into(),
-            Err(err) => error!("Unicode error {}", err),
-        };
+    pub unsafe fn from_relation(relation: &PgRelation) -> Options {
+        let table = PgBox::<pg_sys::ForeignTable>::from_pg(pg_sys::GetForeignTable(relation.rd_id));
+        let server =
+            PgBox::<pg_sys::ForeignServer>::from_pg(pg_sys::GetForeignServer(table.serverid));
 
         Options {
-            server_opts,
-            table_opts,
-            table_name,
+            server_opts: from_pg_list(server.options),
+            table_opts: from_pg_list(table.options),
+            table_name: relation.name().into(),
+            table_namespace: relation.namespace().into(),
         }
     }
 
@@ -145,14 +140,14 @@ impl<T: ForeignData> FdwState<T> {
         node: *mut ForeignScanState,
         eflags: ::std::os::raw::c_int,
     ) {
-        let rel = *(*node).ss.ss_currentRelation;
+        let rel = PgRelation::from_pg((*node).ss.ss_currentRelation);
+        let mut fdw_state = PgBox::<Self>::alloc0();
         let opts = fdw_options::from_relation(&rel);
-        let fdw_state = Box::new(Self {
-            state: T::begin(&opts),
-            itr: std::ptr::null_mut(),
-        });
 
-        (*node).fdw_state = Box::into_raw(fdw_state) as pgx::memcxt::void_mut_ptr;
+        fdw_state.state = T::begin(&opts);
+        fdw_state.itr = std::ptr::null_mut();
+
+        (*node).fdw_state = fdw_state.into_pg() as pgx::memcxt::void_mut_ptr;
     }
 
     unsafe extern "C" fn IterateForeignScan(node: *mut ForeignScanState) -> *mut TupleTableSlot {
@@ -161,15 +156,7 @@ impl<T: ForeignData> FdwState<T> {
 
         let tupdesc = PgTupleDesc::from_pg_copy((*(*node).ss.ss_currentRelation).rd_att);
         let slot = Self::exec_clear_tuple((*node).ss.ss_ScanTupleSlot);
-        let (item, itr_ptr) = if fdw_itr.is_null() {
-            let mut itr = fdw_state.state.execute(&tupdesc);
-            let item = itr.next();
-
-            (item, Box::into_raw(Box::new(itr)) as *mut T::RowIterator)
-        } else {
-            let item = fdw_itr.next();
-            (item, fdw_itr.as_ptr())
-        };
+        let (item, itr_ptr) = Self::itr_next(&mut fdw_itr, &mut fdw_state, &tupdesc);
 
         let ret = match item {
             Some(row) => Self::store_tuple(slot, &tupdesc, row),
@@ -182,6 +169,25 @@ impl<T: ForeignData> FdwState<T> {
         ret
     }
 
+    fn itr_next(
+        fdw_itr: &mut PgBox<<T as ForeignData>::RowIterator>,
+        fdw_state: &mut PgBox<FdwState<T>>,
+        tupdesc: &PgTupleDesc,
+    ) -> (
+        Option<Vec<<T as ForeignData>::Item>>,
+        *mut <T as ForeignData>::RowIterator,
+    ) {
+        if fdw_itr.is_null() {
+            let mut itr = fdw_state.state.execute(&tupdesc);
+            let item = itr.next();
+            let itr_ptr = Box::into_raw(Box::new(itr)) as *mut T::RowIterator;
+
+            (item, itr_ptr)
+        } else {
+            (fdw_itr.next(), fdw_itr.as_ptr())
+        }
+    }
+
     unsafe fn store_tuple(
         slot: *mut TupleTableSlot,
         tupdesc: &PgTupleDesc,
@@ -192,7 +198,7 @@ impl<T: ForeignData> FdwState<T> {
         let mut datums = vec![0 as pg_sys::Datum; attrs_len];
         let mut row_iter = row.into_iter();
 
-        for (i, attr) in tupdesc.iter().enumerate() {
+        for (i, _attr) in tupdesc.iter().enumerate() {
             if let Some(row_i) = row_iter.next() {
                 match row_i.into_datum() {
                     Some(datum) => {
@@ -232,16 +238,15 @@ impl<T: ForeignData> FdwState<T> {
 
     unsafe extern "C" fn ReScanForeignScan(node: *mut ForeignScanState) {}
 
-    unsafe extern "C" fn EndForeignScan(node: *mut ForeignScanState) {
-        Box::from_raw((*node).fdw_state as *mut Self);
-    }
+    unsafe extern "C" fn EndForeignScan(node: *mut ForeignScanState) {}
 
     unsafe extern "C" fn AddForeignUpdateTargets(
         parsetree: *mut Query,
         target_rte: *mut RangeTblEntry,
         target_relation: Relation,
     ) {
-        let opts = fdw_options::from_relation(&*target_relation);
+        let rel = PgRelation::from_pg(target_relation);
+        let opts = fdw_options::from_relation(&rel);
         let tupdesc = PgTupleDesc::from_pg_copy((*target_relation).rd_att);
 
         if let Some(keys) = T::indices(&opts) {
@@ -284,7 +289,7 @@ impl<T: ForeignData> FdwState<T> {
         subplan_index: ::std::os::raw::c_int,
         eflags: ::std::os::raw::c_int,
     ) {
-        let rel = *(*rinfo).ri_RelationDesc;
+        let rel = PgRelation::from_pg((*rinfo).ri_RelationDesc);
         let opts = fdw_options::from_relation(&rel);
         let tupdesc = PgTupleDesc::from_pg_copy(rel.rd_att);
         let wrapper = Box::new(Self {
