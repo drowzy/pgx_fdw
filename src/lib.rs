@@ -250,7 +250,6 @@ impl<T: ForeignData> FdwState<T> {
         let tupdesc = PgTupleDesc::from_pg_copy((*target_relation).rd_att);
 
         if let Some(keys) = T::indices(&opts) {
-            // Build a map of column names to attributes and column index
             let mut list = PgList::<TargetEntry>::from_pg((*parsetree).targetList);
             tupdesc
                 .iter()
@@ -264,8 +263,6 @@ impl<T: ForeignData> FdwState<T> {
                         attr.attcollation,
                         0,
                     );
-
-                    // TODO: error handling
 
                     let ckey = std::ffi::CString::new(attr.name()).unwrap();
                     let tle = pg_sys::makeTargetEntry(
