@@ -289,15 +289,16 @@ impl<T: ForeignData> FdwState<T> {
         subplan_index: ::std::os::raw::c_int,
         eflags: ::std::os::raw::c_int,
     ) {
-        let rel = PgRelation::from_pg((*rinfo).ri_RelationDesc);
-        let opts = fdw_options::from_relation(&rel);
-        let tupdesc = PgTupleDesc::from_pg_copy(rel.rd_att);
-        let wrapper = Box::new(Self {
-            state: T::begin(&opts),
-            itr: std::ptr::null_mut(),
-        });
 
-        (*rinfo).ri_FdwState = Box::into_raw(wrapper) as pgx::memcxt::void_mut_ptr;
+        let mut fdw_state = PgBox::<Self>::alloc0();
+        let rel = PgRelation::from_pg((*rinfo).ri_RelationDesc);
+
+        let opts = fdw_options::from_relation(&rel);
+
+        fdw_state.state = T::begin(&opts);
+        fdw_state.itr = std::ptr::null_mut();
+
+        (*rinfo).ri_FdwState = fdw_state.into_pg() as pgx::memcxt::void_mut_ptr;
     }
 
     unsafe extern "C" fn ExecForeignInsert(
