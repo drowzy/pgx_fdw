@@ -50,8 +50,8 @@ pub mod fdw_options {
 
         match (CStr::from_ptr(key).to_str(), CStr::from_ptr(value).to_str()) {
             (Ok(k), Ok(v)) => (k.into(), v.into()),
-            (Err(err), _) => error!("Unicode error {}", err),
-            (_, Err(err)) => error!("Unicode error {}", err),
+            (Err(err), _) => error!("Option list key err {}", err),
+            (_, Err(err)) => error!("Option list value err {}", err),
         }
     }
 }
@@ -93,7 +93,7 @@ impl<T: ForeignData> FdwState<T> {
     unsafe extern "C" fn get_foreign_paths(
         root: *mut PlannerInfo,
         baserel: *mut RelOptInfo,
-        foreigntableid: Oid,
+        _foreigntableid: Oid,
     ) {
         pg_sys::add_path(
             baserel,
@@ -138,7 +138,7 @@ impl<T: ForeignData> FdwState<T> {
 
     unsafe extern "C" fn begin_foreign_scan(
         node: *mut ForeignScanState,
-        eflags: ::std::os::raw::c_int,
+        _eflags: ::std::os::raw::c_int,
     ) {
         let rel = PgRelation::from_pg((*node).ss.ss_currentRelation);
         let mut fdw_state = PgBox::<Self>::alloc0();
@@ -236,13 +236,13 @@ impl<T: ForeignData> FdwState<T> {
         slot
     }
 
-    unsafe extern "C" fn re_scan_foreign_scan(node: *mut ForeignScanState) {}
+    unsafe extern "C" fn re_scan_foreign_scan(_node: *mut ForeignScanState) {}
 
-    unsafe extern "C" fn end_foreign_scan(node: *mut ForeignScanState) {}
+    unsafe extern "C" fn end_foreign_scan(_node: *mut ForeignScanState) {}
 
     unsafe extern "C" fn add_foreign_update_targets(
         parsetree: *mut Query,
-        target_rte: *mut RangeTblEntry,
+        _target_rte: *mut RangeTblEntry,
         target_relation: Relation,
     ) {
         let rel = PgRelation::from_pg(target_relation);
@@ -280,11 +280,11 @@ impl<T: ForeignData> FdwState<T> {
     }
 
     unsafe extern "C" fn begin_foreign_modify(
-        mtstate: *mut ModifyTableState,
+        _mtstate: *mut ModifyTableState,
         rinfo: *mut ResultRelInfo,
-        fdw_private: *mut List,
-        subplan_index: ::std::os::raw::c_int,
-        eflags: ::std::os::raw::c_int,
+        _fdw_private: *mut List,
+        _subplan_index: ::std::os::raw::c_int,
+        _eflags: ::std::os::raw::c_int,
     ) {
         let mut fdw_state = PgBox::<Self>::alloc0();
         let rel = PgRelation::from_pg((*rinfo).ri_RelationDesc);
@@ -298,10 +298,10 @@ impl<T: ForeignData> FdwState<T> {
     }
 
     unsafe extern "C" fn exec_foreign_insert(
-        estate: *mut EState,
+        _estate: *mut EState,
         rinfo: *mut ResultRelInfo,
         slot: *mut TupleTableSlot,
-        planSlot: *mut TupleTableSlot,
+        _plan_slot: *mut TupleTableSlot,
     ) -> *mut TupleTableSlot {
         let mut fdw_state = PgBox::<Self>::from_pg((*rinfo).ri_FdwState as *mut Self);
         let tupdesc = PgTupleDesc::from_pg_copy((*slot).tts_tupleDescriptor);
@@ -344,7 +344,7 @@ impl<T: ForeignData> FdwState<T> {
     }
 
     unsafe extern "C" fn exec_foreign_delete(
-        estate: *mut EState,
+        _estate: *mut EState,
         rinfo: *mut ResultRelInfo,
         slot: *mut TupleTableSlot,
         plan_slot: *mut TupleTableSlot,

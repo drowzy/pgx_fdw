@@ -54,7 +54,7 @@ impl pgx_fdw::ForeignData for InMemTable {
         let row = tuple
             .iter()
             .try_fold(User::default(), |mut t, (name, datum, typoid)| {
-                match (name.to_string().as_str()) {
+                match name.to_string().as_str() {
                     "id" => t.id = into_value::<String>(*datum, *typoid).unwrap(),
                     "name" => t.name = into_value::<String>(*datum, *typoid).unwrap(),
                     "email" => t.email = into_value::<String>(*datum, *typoid).unwrap(),
@@ -72,7 +72,7 @@ impl pgx_fdw::ForeignData for InMemTable {
 
     fn delete(
         &self,
-        desc: &PgTupleDesc,
+        _desc: &PgTupleDesc,
         tuples: Vec<pgx_fdw::Tuple>,
     ) -> Option<Vec<pgx_fdw::Tuple>> {
         if let Some((name, datum, oid)) = tuples.first() {
