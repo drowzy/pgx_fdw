@@ -82,7 +82,7 @@ pub struct FdwState<T: ForeignData> {
 }
 
 impl<T: ForeignData> FdwState<T> {
-    unsafe extern "C" fn GetForeignRelSize(
+    unsafe extern "C" fn get_foreign_rel_size(
         _root: *mut PlannerInfo,
         baserel: *mut RelOptInfo,
         _foreigntableid: Oid,
@@ -90,7 +90,7 @@ impl<T: ForeignData> FdwState<T> {
         (*baserel).rows = 0.0;
     }
 
-    unsafe extern "C" fn GetForeignPaths(
+    unsafe extern "C" fn get_foreign_paths(
         root: *mut PlannerInfo,
         baserel: *mut RelOptInfo,
         foreigntableid: Oid,
@@ -112,7 +112,7 @@ impl<T: ForeignData> FdwState<T> {
         )
     }
 
-    unsafe extern "C" fn GetForeignPlan(
+    unsafe extern "C" fn get_foreign_plan(
         _root: *mut PlannerInfo,
         baserel: *mut RelOptInfo,
         _foreigntableid: Oid,
@@ -136,7 +136,7 @@ impl<T: ForeignData> FdwState<T> {
         )
     }
 
-    unsafe extern "C" fn beginforeignscan(
+    unsafe extern "C" fn begin_foreign_scan(
         node: *mut ForeignScanState,
         eflags: ::std::os::raw::c_int,
     ) {
@@ -150,7 +150,7 @@ impl<T: ForeignData> FdwState<T> {
         (*node).fdw_state = fdw_state.into_pg() as pgx::memcxt::void_mut_ptr;
     }
 
-    unsafe extern "C" fn IterateForeignScan(node: *mut ForeignScanState) -> *mut TupleTableSlot {
+    unsafe extern "C" fn iterate_foreign_scan(node: *mut ForeignScanState) -> *mut TupleTableSlot {
         let mut fdw_state = PgBox::<Self>::from_pg((*node).fdw_state as *mut Self);
         let mut fdw_itr = PgBox::<T::RowIterator>::from_pg(fdw_state.itr);
 
@@ -236,11 +236,11 @@ impl<T: ForeignData> FdwState<T> {
         slot
     }
 
-    unsafe extern "C" fn ReScanForeignScan(node: *mut ForeignScanState) {}
+    unsafe extern "C" fn re_scan_foreign_scan(node: *mut ForeignScanState) {}
 
-    unsafe extern "C" fn EndForeignScan(node: *mut ForeignScanState) {}
+    unsafe extern "C" fn end_foreign_scan(node: *mut ForeignScanState) {}
 
-    unsafe extern "C" fn AddForeignUpdateTargets(
+    unsafe extern "C" fn add_foreign_update_targets(
         parsetree: *mut Query,
         target_rte: *mut RangeTblEntry,
         target_relation: Relation,
@@ -279,14 +279,13 @@ impl<T: ForeignData> FdwState<T> {
         }
     }
 
-    unsafe extern "C" fn BeginForeignModify(
+    unsafe extern "C" fn begin_foreign_modify(
         mtstate: *mut ModifyTableState,
         rinfo: *mut ResultRelInfo,
         fdw_private: *mut List,
         subplan_index: ::std::os::raw::c_int,
         eflags: ::std::os::raw::c_int,
     ) {
-
         let mut fdw_state = PgBox::<Self>::alloc0();
         let rel = PgRelation::from_pg((*rinfo).ri_RelationDesc);
 
@@ -298,7 +297,7 @@ impl<T: ForeignData> FdwState<T> {
         (*rinfo).ri_FdwState = fdw_state.into_pg() as pgx::memcxt::void_mut_ptr;
     }
 
-    unsafe extern "C" fn ExecForeignInsert(
+    unsafe extern "C" fn exec_foreign_insert(
         estate: *mut EState,
         rinfo: *mut ResultRelInfo,
         slot: *mut TupleTableSlot,
@@ -344,13 +343,13 @@ impl<T: ForeignData> FdwState<T> {
         tuples
     }
 
-    unsafe extern "C" fn ExecForeignDelete(
+    unsafe extern "C" fn exec_foreign_delete(
         estate: *mut EState,
         rinfo: *mut ResultRelInfo,
         slot: *mut TupleTableSlot,
         plan_slot: *mut TupleTableSlot,
     ) -> *mut TupleTableSlot {
-        let mut fdw_state = PgBox::<Self>::from_pg((*rinfo).ri_FdwState as *mut Self);
+        let fdw_state = PgBox::<Self>::from_pg((*rinfo).ri_FdwState as *mut Self);
         let tupdesc = PgTupleDesc::from_pg_copy((*plan_slot).tts_tupleDescriptor);
         let tuples = Self::slot_to_tuples(plan_slot, &tupdesc);
         let _result = fdw_state.state.delete(&tupdesc, tuples);
@@ -361,25 +360,25 @@ impl<T: ForeignData> FdwState<T> {
     pub fn into_datum() -> pg_sys::Datum {
         let mut handler = PgBox::<pg_sys::FdwRoutine>::alloc_node(pg_sys::NodeTag_T_FdwRoutine);
 
-        handler.GetForeignRelSize = Some(Self::GetForeignRelSize);
-        handler.GetForeignPaths = Some(Self::GetForeignPaths);
-        handler.GetForeignPlan = Some(Self::GetForeignPlan);
-        handler.BeginForeignScan = Some(Self::beginforeignscan);
-        handler.IterateForeignScan = Some(Self::IterateForeignScan);
-        handler.ReScanForeignScan = Some(Self::ReScanForeignScan);
-        handler.EndForeignScan = Some(Self::EndForeignScan);
+        handler.GetForeignRelSize = Some(Self::get_foreign_rel_size);
+        handler.GetForeignPaths = Some(Self::get_foreign_paths);
+        handler.GetForeignPlan = Some(Self::get_foreign_plan);
+        handler.BeginForeignScan = Some(Self::begin_foreign_scan);
+        handler.IterateForeignScan = Some(Self::iterate_foreign_scan);
+        handler.ReScanForeignScan = Some(Self::re_scan_foreign_scan);
+        handler.EndForeignScan = Some(Self::end_foreign_scan);
         handler.EndForeignInsert = None;
         handler.ReparameterizeForeignPathByChild = None;
         handler.ShutdownForeignScan = None;
         handler.ReInitializeDSMForeignScan = None;
         handler.GetForeignJoinPaths = None;
         handler.GetForeignUpperPaths = None;
-        handler.AddForeignUpdateTargets = Some(Self::AddForeignUpdateTargets);
+        handler.AddForeignUpdateTargets = Some(Self::add_foreign_update_targets);
         handler.PlanForeignModify = None;
-        handler.BeginForeignModify = Some(Self::BeginForeignModify);
-        handler.ExecForeignInsert = Some(Self::ExecForeignInsert);
+        handler.BeginForeignModify = Some(Self::begin_foreign_modify);
+        handler.ExecForeignInsert = Some(Self::exec_foreign_insert);
         handler.ExecForeignUpdate = None;
-        handler.ExecForeignDelete = Some(Self::ExecForeignDelete);
+        handler.ExecForeignDelete = Some(Self::exec_foreign_delete);
         handler.EndForeignModify = None;
         handler.IsForeignRelUpdatable = None;
         handler.PlanDirectModify = None;
