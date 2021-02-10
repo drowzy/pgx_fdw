@@ -18,10 +18,13 @@ pub mod fdw_options {
         pub table_namespace: String,
     }
 
-    pub unsafe fn from_relation(relation: &PgRelation) -> Options {
-        let table = PgBox::<pg_sys::ForeignTable>::from_pg(pg_sys::GetForeignTable(relation.rd_id));
-        let server =
-            PgBox::<pg_sys::ForeignServer>::from_pg(pg_sys::GetForeignServer(table.serverid));
+    pub fn from_relation(relation: &PgRelation) -> Options {
+        let table = PgBox::<pg_sys::ForeignTable>::from_pg(unsafe {
+            pg_sys::GetForeignTable(relation.rd_id)
+        });
+        let server = PgBox::<pg_sys::ForeignServer>::from_pg(unsafe {
+            pg_sys::GetForeignServer(table.serverid)
+        });
 
         Options {
             server_opts: from_pg_list(server.options),
@@ -140,8 +143,8 @@ impl<T: ForeignData> FdwState<T> {
         node: *mut ForeignScanState,
         _eflags: ::std::os::raw::c_int,
     ) {
-        let rel = PgRelation::from_pg((*node).ss.ss_currentRelation);
         let mut fdw_state = PgBox::<Self>::alloc0();
+        let rel = PgRelation::from_pg((*node).ss.ss_currentRelation);
         let opts = fdw_options::from_relation(&rel);
 
         fdw_state.state = T::begin(&opts);
@@ -155,6 +158,7 @@ impl<T: ForeignData> FdwState<T> {
         let mut fdw_itr = PgBox::<T::RowIterator>::from_pg(fdw_state.itr);
 
         let tupdesc = PgTupleDesc::from_pg_copy((*(*node).ss.ss_currentRelation).rd_att);
+
         let slot = Self::exec_clear_tuple((*node).ss.ss_ScanTupleSlot);
         let (item, itr_ptr) = Self::itr_next(&mut fdw_itr, &mut fdw_state, &tupdesc);
 
