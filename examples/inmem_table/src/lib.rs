@@ -27,11 +27,11 @@ impl pgx_fdw::ForeignData for InMemTable {
     type Item = String;
     type RowIterator = std::vec::IntoIter<Vec<Self::Item>>;
 
-    fn begin(_opts: &pgx_fdw::fdw_options::Options) -> Self {
+    fn begin(_opts: &pgx_fdw::FdwOptions) -> Self {
         InMemTable {}
     }
 
-    fn indices(_opts: &pgx_fdw::fdw_options::Options) -> Option<Vec<String>> {
+    fn indices(_opts: &pgx_fdw::FdwOptions) -> Option<Vec<String>> {
         Some(vec![String::from("id")])
     }
 

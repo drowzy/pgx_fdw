@@ -1,24 +1,21 @@
 use pg_sys::*;
 use pgx::*;
+use std::collections::HashMap;
+use std::ffi::CStr;
 
 // https://www.postgresql.org/docs/13/fdw-callbacks.html
 pub type Tuple = (String, Option<pg_sys::Datum>, pgx::PgOid);
+pub type FdwOption = HashMap<String, String>;
+#[derive(Debug)]
+pub struct FdwOptions {
+    pub server_opts: FdwOption,
+    pub table_opts: FdwOption,
+    pub table_name: String,
+    pub table_namespace: String,
+}
 
-pub mod fdw_options {
-    use pgx::*;
-    use std::collections::HashMap;
-    use std::ffi::CStr;
-
-    pub type OptionMap = HashMap<String, String>;
-    #[derive(Debug)]
-    pub struct Options {
-        pub server_opts: OptionMap,
-        pub table_opts: OptionMap,
-        pub table_name: String,
-        pub table_namespace: String,
-    }
-
-    pub fn from_relation(relation: &PgRelation) -> Options {
+impl FdwOptions {
+    pub fn from_relation(relation: &PgRelation) -> Self {
         let table = PgBox::<pg_sys::ForeignTable>::from_pg(unsafe {
             pg_sys::GetForeignTable(relation.rd_id)
         });
@@ -26,15 +23,15 @@ pub mod fdw_options {
             pg_sys::GetForeignServer(table.serverid)
         });
 
-        Options {
-            server_opts: from_pg_list(server.options),
-            table_opts: from_pg_list(table.options),
+        Self {
+            server_opts: Self::from_pg_list(server.options),
+            table_opts: Self::from_pg_list(table.options),
             table_name: relation.name().into(),
             table_namespace: relation.namespace().into(),
         }
     }
 
-    fn from_pg_list(opts: *mut pg_sys::List) -> OptionMap {
+    fn from_pg_list(opts: *mut pg_sys::List) -> FdwOption {
         if opts.is_null() {
             return HashMap::new();
         }
@@ -43,8 +40,8 @@ pub mod fdw_options {
 
         pg_list
             .iter_ptr()
-            .map(|ptr| unsafe { elem_to_tuple(ptr) })
-            .collect::<OptionMap>()
+            .map(|ptr| unsafe { Self::elem_to_tuple(ptr) })
+            .collect::<FdwOption>()
     }
 
     unsafe fn elem_to_tuple(elem: *mut pg_sys::DefElem) -> (String, String) {
@@ -63,9 +60,9 @@ pub trait ForeignData {
     type Item: IntoDatum;
     type RowIterator: Iterator<Item = Vec<Self::Item>>;
 
-    fn begin(options: &fdw_options::Options) -> Self;
+    fn begin(options: &FdwOptions) -> Self;
     fn execute(&mut self, desc: &PgTupleDesc) -> Self::RowIterator;
-    fn indices(_options: &fdw_options::Options) -> Option<Vec<String>> {
+    fn indices(_options: &FdwOptions) -> Option<Vec<String>> {
         None
     }
 
@@ -145,7 +142,7 @@ impl<T: ForeignData> FdwState<T> {
     ) {
         let mut fdw_state = PgBox::<Self>::alloc0();
         let rel = PgRelation::from_pg((*node).ss.ss_currentRelation);
-        let opts = fdw_options::from_relation(&rel);
+        let opts = FdwOptions::from_relation(&rel);
 
         fdw_state.state = T::begin(&opts);
         fdw_state.itr = std::ptr::null_mut();
@@ -248,7 +245,7 @@ impl<T: ForeignData> FdwState<T> {
         target_relation: Relation,
     ) {
         let rel = PgRelation::from_pg(target_relation);
-        let opts = fdw_options::from_relation(&rel);
+        let opts = FdwOptions::from_relation(&rel);
         let tupdesc = PgTupleDesc::from_pg_copy((*target_relation).rd_att);
 
         if let Some(keys) = T::indices(&opts) {
@@ -291,7 +288,7 @@ impl<T: ForeignData> FdwState<T> {
         let mut fdw_state = PgBox::<Self>::alloc0();
         let rel = PgRelation::from_pg((*rinfo).ri_RelationDesc);
 
-        let opts = fdw_options::from_relation(&rel);
+        let opts = FdwOptions::from_relation(&rel);
 
         fdw_state.state = T::begin(&opts);
         fdw_state.itr = std::ptr::null_mut();
