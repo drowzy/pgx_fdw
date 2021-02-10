@@ -223,20 +223,18 @@ impl<T: ForeignData> FdwState<T> {
     }
 
     unsafe fn exec_clear_tuple(slot: *mut TupleTableSlot) -> *mut TupleTableSlot {
-        match (*(*slot).tts_ops).clear {
-            Some(clear_fun) => {
-                clear_fun(slot);
-                return slot;
-            }
-            None => error!(""),
-        };
+        if let Some(fun) = (*(*slot).tts_ops).clear {
+            fun(slot);
+        }
+
+        slot
     }
 
     unsafe fn get_some_attrs(slot: *mut TupleTableSlot, natts: i32) -> *mut TupleTableSlot {
-        match (*(*slot).tts_ops).getsomeattrs {
-            Some(fun) => fun(slot, natts),
-            None => error!(""),
+        if let Some(fun) = (*(*slot).tts_ops).getsomeattrs {
+            fun(slot, natts);
         }
+
         slot
     }
 
@@ -317,10 +315,8 @@ impl<T: ForeignData> FdwState<T> {
     }
 
     unsafe fn slot_to_tuples(slot: *mut TupleTableSlot, tupdesc: &PgTupleDesc) -> Vec<Tuple> {
-        let slot = if (*slot).tts_nvalid == 0 {
-            Self::get_some_attrs(slot, tupdesc.natts)
-        } else {
-            slot
+        if (*slot).tts_nvalid == 0 {
+            Self::get_some_attrs(slot, tupdesc.natts);
         };
 
         let datums: &[pg_sys::Datum] =
