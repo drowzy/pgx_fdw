@@ -66,7 +66,16 @@ pub trait ForeignData {
         None
     }
 
-    fn insert(&mut self, _desc: &PgTupleDesc, _row: Vec<Tuple>) -> Option<Vec<Tuple>> {
+    fn insert(&self, _desc: &PgTupleDesc, _row: Vec<Tuple>) -> Option<Vec<Tuple>> {
+        None
+    }
+
+    fn update(
+        &self,
+        _desc: &PgTupleDesc,
+        _row: Vec<Tuple>,
+        _indices: Vec<Tuple>,
+    ) -> Option<Vec<Tuple>> {
         None
     }
 
@@ -302,7 +311,7 @@ impl<T: ForeignData> FdwState<T> {
         slot: *mut TupleTableSlot,
         _plan_slot: *mut TupleTableSlot,
     ) -> *mut TupleTableSlot {
-        let mut fdw_state = PgBox::<Self>::from_pg((*rinfo).ri_FdwState as *mut Self);
+        let fdw_state = PgBox::<Self>::from_pg((*rinfo).ri_FdwState as *mut Self);
         let tupdesc = PgTupleDesc::from_pg_copy((*slot).tts_tupleDescriptor);
         let tuples = Self::slot_to_tuples(slot, &tupdesc);
         let _result = fdw_state.state.insert(&tupdesc, tuples);
@@ -340,6 +349,26 @@ impl<T: ForeignData> FdwState<T> {
         tuples
     }
 
+    unsafe extern "C" fn exec_foreign_update(
+        _estate: *mut EState,
+        rinfo: *mut ResultRelInfo,
+        slot: *mut TupleTableSlot,
+        plan_slot: *mut TupleTableSlot,
+    ) -> *mut TupleTableSlot {
+        let fdw_state = PgBox::<Self>::from_pg((*rinfo).ri_FdwState as *mut Self);
+
+        let tupdesc = PgTupleDesc::from_pg_copy((*slot).tts_tupleDescriptor);
+        let tuples = Self::slot_to_tuples(slot, &tupdesc);
+
+        let plan_tupdesc = PgTupleDesc::from_pg_copy((*plan_slot).tts_tupleDescriptor);
+        let indices = Self::slot_to_tuples(plan_slot, &plan_tupdesc);
+
+        let _result = fdw_state.state.update(&tupdesc, tuples, indices);
+
+        (*rinfo).ri_FdwState = fdw_state.into_pg() as pgx::memcxt::void_mut_ptr;
+        slot
+    }
+
     unsafe extern "C" fn exec_foreign_delete(
         _estate: *mut EState,
         rinfo: *mut ResultRelInfo,
@@ -353,6 +382,8 @@ impl<T: ForeignData> FdwState<T> {
 
         slot
     }
+
+    unsafe extern "C" fn end_foreign_modify(_estate: *mut EState, _rinfo: *mut ResultRelInfo) {}
 
     pub fn into_datum() -> pg_sys::Datum {
         let mut handler = PgBox::<pg_sys::FdwRoutine>::alloc_node(pg_sys::NodeTag_T_FdwRoutine);
@@ -374,9 +405,9 @@ impl<T: ForeignData> FdwState<T> {
         handler.PlanForeignModify = None;
         handler.BeginForeignModify = Some(Self::begin_foreign_modify);
         handler.ExecForeignInsert = Some(Self::exec_foreign_insert);
-        handler.ExecForeignUpdate = None;
+        handler.ExecForeignUpdate = Some(Self::exec_foreign_update);
         handler.ExecForeignDelete = Some(Self::exec_foreign_delete);
-        handler.EndForeignModify = None;
+        handler.EndForeignModify = Some(Self::end_foreign_modify);
         handler.IsForeignRelUpdatable = None;
         handler.PlanDirectModify = None;
         handler.BeginDirectModify = None;
@@ -450,16 +481,6 @@ impl<T: ForeignData> FdwState<T> {
 //        planSlot: *mut TupleTableSlot,
 //    ) -> *mut TupleTableSlot,
 //>;
-//ExecForeignDelete_function = ::std::option::Option<
-//    unsafe extern "C" fn(
-//        estate: *mut EState,
-//        rinfo: *mut ResultRelInfo,
-//        slot: *mut TupleTableSlot,
-//        planSlot: *mut TupleTableSlot,
-//    ) -> *mut TupleTableSlot,
-//>;
-//EndForeignModify_function =
-//    ::std::option::Option<unsafe extern "C" fn(estate: *mut EState, rinfo: *mut ResultRelInfo)>;
 //BeginForeignInsert_function = ::std::option::Option<
 //    unsafe extern "C" fn(mtstate: *mut ModifyTableState, rinfo: *mut ResultRelInfo),
 //>;
