@@ -15,6 +15,38 @@ struct User {
     email: String,
 }
 
+impl User {
+    pub fn from_tuples(tuples: Vec<pgx_fdw::Tuple>) -> Self {
+        let row = tuples
+            .iter()
+            .try_fold(User::default(), |mut t, (name, datum, typoid)| {
+                match name.to_string().as_str() {
+                    "id" => t.id = into_value::<String>(*datum, *typoid).unwrap(),
+                    "name" => t.name = into_value::<String>(*datum, *typoid).unwrap(),
+                    "email" => t.email = into_value::<String>(*datum, *typoid).unwrap(),
+                    _ => error!(""),
+                }
+
+                Some(t)
+            });
+
+        row.unwrap()
+    }
+    pub fn merge(&mut self, other: &Self) {
+        if other.id != String::new() {
+            self.id = other.id.clone();
+        }
+
+        if other.name != String::new() {
+            self.name = other.name.clone();
+        }
+
+        if other.email != String::new() {
+            self.email = other.email.clone();
+        }
+    }
+}
+
 fn into_value<T: FromDatum>(datum: Option<pg_sys::Datum>, typoid: pgx::PgOid) -> Option<T> {
     match datum {
         Some(d) => unsafe { T::from_datum(d, false, typoid.value()) },
@@ -47,25 +79,45 @@ impl pgx_fdw::ForeignData for InMemTable {
     }
 
     fn insert(
-        &mut self,
+        &self,
         _desc: &PgTupleDesc,
         tuple: Vec<pgx_fdw::Tuple>,
     ) -> Option<Vec<pgx_fdw::Tuple>> {
-        let row = tuple
-            .iter()
-            .try_fold(User::default(), |mut t, (name, datum, typoid)| {
-                match name.to_string().as_str() {
-                    "id" => t.id = into_value::<String>(*datum, *typoid).unwrap(),
-                    "name" => t.name = into_value::<String>(*datum, *typoid).unwrap(),
-                    "email" => t.email = into_value::<String>(*datum, *typoid).unwrap(),
-                    _ => error!(""),
-                }
-
-                Some(t)
-            });
-
+        let row = User::from_tuples(tuple);
         let mut rows = TABLE.write().unwrap();
-        rows.push(row.unwrap().clone());
+
+        rows.push(row.clone());
+
+        None
+    }
+
+    fn update(
+        &self,
+        _desc: &PgTupleDesc,
+        tuples: Vec<pgx_fdw::Tuple>,
+        indices: Vec<pgx_fdw::Tuple>,
+    ) -> Option<Vec<pgx_fdw::Tuple>> {
+        if let Some((name, datum, oid)) = indices.first() {
+            let fun = match name.to_string().as_str() {
+                "id" => |u: &User| u.id == into_value::<String>(*datum, *oid).unwrap(),
+                _ => error!(""),
+            };
+
+            let mut rows = TABLE.write().unwrap();
+            let new_row = User::from_tuples(tuples);
+            let positions: Vec<usize> = rows
+                .iter()
+                .enumerate()
+                .filter(|(_i, u)| fun(u))
+                .map(|(i, _)| i)
+                .collect();
+
+            for p in positions {
+                let u = &mut rows[p];
+
+                u.merge(&new_row);
+            }
+        }
 
         None
     }
