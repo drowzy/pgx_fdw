@@ -6,6 +6,7 @@ use std::ffi::CStr;
 // https://www.postgresql.org/docs/13/fdw-callbacks.html
 pub type Tuple = (String, Option<pg_sys::Datum>, pgx::PgOid);
 pub type FdwOption = HashMap<String, String>;
+
 #[derive(Debug)]
 pub struct FdwOptions {
     pub server_opts: FdwOption,
@@ -145,38 +146,35 @@ impl<T: ForeignData> FdwState<T> {
         )
     }
 
-    unsafe extern "C" fn begin_foreign_scan(
-        node: *mut ForeignScanState,
-        _eflags: ::std::os::raw::c_int,
-    ) {
+    extern "C" fn begin_foreign_scan(node: *mut ForeignScanState, _eflags: ::std::os::raw::c_int) {
         let mut fdw_state = PgBox::<Self>::alloc0();
-        let rel = PgRelation::from_pg((*node).ss.ss_currentRelation);
+        let mut n = PgBox::<ForeignScanState>::from_pg(node);
+        let rel = unsafe { PgRelation::from_pg(n.ss.ss_currentRelation) };
         let opts = FdwOptions::from_relation(&rel);
 
         fdw_state.state = T::begin(&opts);
         fdw_state.itr = std::ptr::null_mut();
 
-        (*node).fdw_state = fdw_state.into_pg() as pgx::memcxt::void_mut_ptr;
+        n.fdw_state = fdw_state.into_pg() as pgx::memcxt::void_mut_ptr;
+        // (*node).fdw_state = fdw_state.into_pg() as pgx::memcxt::void_mut_ptr;
     }
 
     unsafe extern "C" fn iterate_foreign_scan(node: *mut ForeignScanState) -> *mut TupleTableSlot {
-        let mut fdw_state = PgBox::<Self>::from_pg((*node).fdw_state as *mut Self);
+        let mut n = PgBox::<ForeignScanState>::from_pg(node);
+        let mut fdw_state = PgBox::<Self>::from_pg(n.fdw_state as *mut Self);
         let mut fdw_itr = PgBox::<T::RowIterator>::from_pg(fdw_state.itr);
 
-        let tupdesc = PgTupleDesc::from_pg_copy((*(*node).ss.ss_currentRelation).rd_att);
+        let rel = PgRelation::from_pg(n.ss.ss_currentRelation);
 
-        let slot = Self::exec_clear_tuple((*node).ss.ss_ScanTupleSlot);
+        let tupdesc = PgTupleDesc::from_pg_copy(rel.rd_att);
+
+        let slot = Self::exec_clear_tuple(n.ss.ss_ScanTupleSlot);
         let (item, itr_ptr) = Self::itr_next(&mut fdw_itr, &mut fdw_state, &tupdesc);
 
-        let ret = match item {
-            Some(row) => Self::store_tuple(slot, &tupdesc, row),
-            None => slot,
-        };
-
         fdw_state.itr = itr_ptr;
-        (*node).fdw_state = fdw_state.into_pg() as pgx::memcxt::void_mut_ptr;
+        n.fdw_state = fdw_state.into_pg() as pgx::memcxt::void_mut_ptr;
 
-        ret
+        item.map_or(slot, |row| Self::store_tuple(slot, &tupdesc, row))
     }
 
     fn itr_next(
@@ -198,7 +196,7 @@ impl<T: ForeignData> FdwState<T> {
         }
     }
 
-    unsafe fn store_tuple(
+    fn store_tuple(
         slot: *mut TupleTableSlot,
         tupdesc: &PgTupleDesc,
         row: Vec<<T as ForeignData>::Item>,
@@ -222,10 +220,12 @@ impl<T: ForeignData> FdwState<T> {
             }
         }
 
-        let tuple =
-            pg_sys::heap_form_tuple(tupdesc.as_ptr(), datums.as_mut_ptr(), nulls.as_mut_ptr());
+        unsafe {
+            let tuple =
+                pg_sys::heap_form_tuple(tupdesc.as_ptr(), datums.as_mut_ptr(), nulls.as_mut_ptr());
 
-        pg_sys::ExecStoreHeapTuple(tuple, slot, false)
+            pg_sys::ExecStoreHeapTuple(tuple, slot, false)
+        }
     }
 
     unsafe fn exec_clear_tuple(slot: *mut TupleTableSlot) -> *mut TupleTableSlot {
@@ -287,7 +287,7 @@ impl<T: ForeignData> FdwState<T> {
         }
     }
 
-    unsafe extern "C" fn begin_foreign_modify(
+    extern "C" fn begin_foreign_modify(
         _mtstate: *mut ModifyTableState,
         rinfo: *mut ResultRelInfo,
         _fdw_private: *mut List,
@@ -295,39 +295,49 @@ impl<T: ForeignData> FdwState<T> {
         _eflags: ::std::os::raw::c_int,
     ) {
         let mut fdw_state = PgBox::<Self>::alloc0();
-        let rel = PgRelation::from_pg((*rinfo).ri_RelationDesc);
+        let mut rinfo_box = PgBox::<ResultRelInfo>::from_pg(rinfo);
+        let rel = unsafe { PgRelation::from_pg(rinfo_box.ri_RelationDesc) };
 
         let opts = FdwOptions::from_relation(&rel);
 
         fdw_state.state = T::begin(&opts);
         fdw_state.itr = std::ptr::null_mut();
 
-        (*rinfo).ri_FdwState = fdw_state.into_pg() as pgx::memcxt::void_mut_ptr;
+        rinfo_box.ri_FdwState = fdw_state.into_pg() as pgx::memcxt::void_mut_ptr;
     }
 
-    unsafe extern "C" fn exec_foreign_insert(
+    extern "C" fn exec_foreign_insert(
         _estate: *mut EState,
         rinfo: *mut ResultRelInfo,
         slot: *mut TupleTableSlot,
         _plan_slot: *mut TupleTableSlot,
     ) -> *mut TupleTableSlot {
-        let fdw_state = PgBox::<Self>::from_pg((*rinfo).ri_FdwState as *mut Self);
-        let tupdesc = PgTupleDesc::from_pg_copy((*slot).tts_tupleDescriptor);
-        let tuples = Self::slot_to_tuples(slot, &tupdesc);
+        let mut rinfo_box = PgBox::<ResultRelInfo>::from_pg(rinfo);
+        let slot_box = PgBox::<TupleTableSlot>::from_pg(slot);
+        let fdw_state = PgBox::<Self>::from_pg(rinfo_box.ri_FdwState as *mut Self);
+        let tupdesc = PgTupleDesc::from_pg_copy(slot_box.tts_tupleDescriptor);
+
+        let tuples = Self::slot_to_tuples(&slot_box, &tupdesc);
+
         let _result = fdw_state.state.insert(&tupdesc, tuples);
 
-        (*rinfo).ri_FdwState = fdw_state.into_pg() as pgx::memcxt::void_mut_ptr;
-        slot
+        rinfo_box.ri_FdwState = fdw_state.into_pg() as pgx::memcxt::void_mut_ptr;
+        slot_box.into_pg()
     }
 
-    unsafe fn slot_to_tuples(slot: *mut TupleTableSlot, tupdesc: &PgTupleDesc) -> Vec<Tuple> {
-        if (*slot).tts_nvalid == 0 {
-            Self::get_some_attrs(slot, tupdesc.natts);
+    fn slot_to_tuples(slot: &PgBox<TupleTableSlot>, tupdesc: &PgTupleDesc) -> Vec<Tuple> {
+        if slot.tts_nvalid == 0 {
+            unsafe {
+                Self::get_some_attrs(slot.as_ptr(), tupdesc.natts);
+            }
         };
 
-        let datums: &[pg_sys::Datum] =
-            std::slice::from_raw_parts((*slot).tts_values, (*slot).tts_nvalid as usize);
-        let nulls = std::slice::from_raw_parts((*slot).tts_isnull, (*slot).tts_nvalid as usize);
+        let (datums, nulls) = unsafe {
+            (
+                std::slice::from_raw_parts(slot.tts_values, slot.tts_nvalid as usize),
+                std::slice::from_raw_parts(slot.tts_isnull, (*slot).tts_nvalid as usize),
+            )
+        };
 
         let tuples: Vec<Tuple> = tupdesc
             .iter()
@@ -336,11 +346,13 @@ impl<T: ForeignData> FdwState<T> {
                 let oid = attr.type_oid();
                 (
                     attr.name().into(),
-                    pg_sys::Datum::from_datum(
-                        datums[i].to_owned(),
-                        nulls[i].to_owned(),
-                        oid.value(),
-                    ),
+                    unsafe {
+                        pg_sys::Datum::from_datum(
+                            datums[i].to_owned(),
+                            nulls[i].to_owned(),
+                            oid.value(),
+                        )
+                    },
                     oid,
                 )
             })
@@ -349,41 +361,50 @@ impl<T: ForeignData> FdwState<T> {
         tuples
     }
 
-    unsafe extern "C" fn exec_foreign_update(
+    extern "C" fn exec_foreign_update(
         _estate: *mut EState,
         rinfo: *mut ResultRelInfo,
         slot: *mut TupleTableSlot,
         plan_slot: *mut TupleTableSlot,
     ) -> *mut TupleTableSlot {
-        let fdw_state = PgBox::<Self>::from_pg((*rinfo).ri_FdwState as *mut Self);
+        let mut rinfo_box = PgBox::<ResultRelInfo>::from_pg(rinfo);
+        let fdw_state = PgBox::<Self>::from_pg(rinfo_box.ri_FdwState as *mut Self);
+        let slot_box = PgBox::<TupleTableSlot>::from_pg(slot);
+        let plan_slot_box = PgBox::<TupleTableSlot>::from_pg(plan_slot);
 
-        let tupdesc = PgTupleDesc::from_pg_copy((*slot).tts_tupleDescriptor);
-        let tuples = Self::slot_to_tuples(slot, &tupdesc);
+        let tupdesc = PgTupleDesc::from_pg_copy(slot_box.tts_tupleDescriptor);
+        let plan_tupdesc = PgTupleDesc::from_pg_copy(plan_slot_box.tts_tupleDescriptor);
 
-        let plan_tupdesc = PgTupleDesc::from_pg_copy((*plan_slot).tts_tupleDescriptor);
-        let indices = Self::slot_to_tuples(plan_slot, &plan_tupdesc);
+        let tuples = Self::slot_to_tuples(&slot_box, &tupdesc);
+        let indices = Self::slot_to_tuples(&plan_slot_box, &plan_tupdesc);
 
         let _result = fdw_state.state.update(&tupdesc, tuples, indices);
 
-        (*rinfo).ri_FdwState = fdw_state.into_pg() as pgx::memcxt::void_mut_ptr;
-        slot
+        rinfo_box.ri_FdwState = fdw_state.into_pg() as pgx::memcxt::void_mut_ptr;
+        slot_box.into_pg()
     }
 
-    unsafe extern "C" fn exec_foreign_delete(
+    extern "C" fn exec_foreign_delete(
         _estate: *mut EState,
         rinfo: *mut ResultRelInfo,
         slot: *mut TupleTableSlot,
         plan_slot: *mut TupleTableSlot,
     ) -> *mut TupleTableSlot {
-        let fdw_state = PgBox::<Self>::from_pg((*rinfo).ri_FdwState as *mut Self);
-        let tupdesc = PgTupleDesc::from_pg_copy((*plan_slot).tts_tupleDescriptor);
-        let tuples = Self::slot_to_tuples(plan_slot, &tupdesc);
+        let mut rinfo_box = PgBox::<ResultRelInfo>::from_pg(rinfo);
+        let fdw_state = PgBox::<Self>::from_pg(rinfo_box.ri_FdwState as *mut Self);
+        let plan_slot_box = PgBox::<TupleTableSlot>::from_pg(plan_slot);
+
+        let tupdesc = PgTupleDesc::from_pg_copy(plan_slot_box.tts_tupleDescriptor);
+
+        let tuples = Self::slot_to_tuples(&plan_slot_box, &tupdesc);
         let _result = fdw_state.state.delete(&tupdesc, tuples);
+
+        rinfo_box.ri_FdwState = fdw_state.into_pg() as pgx::memcxt::void_mut_ptr;
 
         slot
     }
 
-    unsafe extern "C" fn end_foreign_modify(_estate: *mut EState, _rinfo: *mut ResultRelInfo) {}
+    extern "C" fn end_foreign_modify(_estate: *mut EState, _rinfo: *mut ResultRelInfo) {}
 
     pub fn into_datum() -> pg_sys::Datum {
         let mut handler = PgBox::<pg_sys::FdwRoutine>::alloc_node(pg_sys::NodeTag_T_FdwRoutine);
